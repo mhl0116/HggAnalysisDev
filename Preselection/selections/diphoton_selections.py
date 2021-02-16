@@ -5,6 +5,66 @@ import numba
 import selections.selection_utils as utils
 from selections import photon_selections
 
+@numba.jit
+def select_photon_nb(photon, gHIdx, mgg):
+    nEvents = len(photon)
+    nPhotons = numpy.int64(0)
+    for i in range(nEvents):
+        nPhotons += len(photon[i])
+
+    mask_offsets = numpy.empty(nEvents+1, numpy.int64)
+    mask_offsets[0] = 0
+    mask_contents = numpy.empty(nPhotons, numpy.bool_)
+    for i in range(nEvents):
+        mask_offsets[i+1] = mask_offsets[i]
+        phos = photon[i]
+        leadidx = gHIdx[i][0]
+        subleadidx = gHIdx[i][1]
+        for j in range(len(phos)):
+            pho = phos[j] 
+            if (pho.mvaID < -0.7) or ((j != leadidx ) and (j != subleadidx)):
+                mask_contents[mask_offsets[i+1]] = False
+            elif ((j == leadidx) and (pho.pt/mgg[i] < 0.33)):
+                mask_contents[mask_offsets[i+1]] = False
+            elif ((j == subleadidx) and (pho.pt/mgg[i] < 0.25)):		#changed 0.3 to 0.25 for sub-leading pho
+                mask_contents[mask_offsets[i+1]] = False
+            else:
+                mask_contents[mask_offsets[i+1]] = True 
+
+            mask_offsets[i+1] += 1
+
+    return mask_offsets, mask_contents 
+
+def select_photon(photon, gHIdx, mgg):
+    offsets, contents = select_photon_nb(photon, gHIdx, mgg)
+    mask_photons_listoffsetarray = awkward.layout.ListOffsetArray64(awkward.layout.Index64(offsets), awkward.layout.NumpyArray(contents) )
+    return awkward.Array(mask_photons_listoffsetarray)    
+
+def diphoton_preselection_fromskim(events, gHIdx, photons, options, debug):
+    mask_photons = select_photon(photons, gHIdx.gHidx, events.ggMass)
+    mask_diphoton = diphoton_preselection_perevent(events, gHIdx.gHidx, photons, options["resonant"])
+    mask = mask_diphoton & (awkward.num(photons[mask_photons]) == 2)
+    return events[mask], photons[mask_photons][mask]
+
+@numba.jit
+def diphoton_preselection_perevent(events, gHIdx, photons, isRes):
+    nEvents = len(photons)
+    mask_init = numpy.zeros(nEvents, dtype=numpy.int64)
+    mask_dipho =  mask_init > 0 # all False
+    for i in range(nEvents):
+        phoidx1 = gHIdx[i][0]
+        phoidx2 = gHIdx[i][1]
+        pho1 = photons[i][phoidx1]
+        pho2 = photons[i][phoidx2]
+        if (pho1.mvaID < -0.7) | (pho2.mvaID < -0.7): continue
+        if (pho1.pt/events.ggMass[i] < 0.3) | (pho2.pt/events.ggMass[i] < 0.25): continue
+        if ( events.ggMass[i] < 100 ) | ( events.ggMass[i] > 180 ): continue
+        if isRes == False :
+            if events.ggMass[i] > 120 and events.ggMass[i] < 130 : continue
+        mask_dipho[i] = True 
+
+    return mask_dipho 
+
 def diphoton_preselection(events, photons, options, debug):
     # Initialize cut diagnostics tool for debugging
     cut_diagnostics = utils.CutDiagnostics(events = events, debug = debug, cut_set = "[photon_selections.py : diphoton_preselection]")

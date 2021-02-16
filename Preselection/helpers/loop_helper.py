@@ -47,6 +47,7 @@ class LoopHelper():
             print("[LoopHelper] Creating LoopHelper instance with options:")
             print("\n".join(["{0}={1!r}".format(a, b) for a, b in kwargs.items()]))
 
+        # selection_options is set here
         with open(self.options, "r") as f_in:
             options = json.load(f_in)
             for key, info in options.items():
@@ -81,6 +82,7 @@ class LoopHelper():
         self.prepare_jobs()     # split files for each job, prepare relevants inputs (scale1fb, isData, etc)
 
         start = time.time()
+
         self.submit_jobs()      # actually submit the jobs (local, Dask, condor) 
         elapsed_time = time.time() - start
         print("[LoopHelper] Total time to run %d jobs on %d cores: %.2f minutes" % (len(self.jobs_manager), self.nCores, elapsed_time/60.)) 
@@ -221,13 +223,14 @@ class LoopHelper():
     ### Physics: selections, etc ###
     ################################
 
-    def select_events(self, events, metadata):
+    def select_events(self, events, gHidx, metadata):
         options = copy.deepcopy(self.selection_options)
         for key, value in metadata.items(): # add sample-specific options to selection options
             options[key] = value
 
         # Diphoton preselection
-        diphoton_events, selected_photons = diphoton_selections.diphoton_preselection(events, events.Photon, options, self.debug)
+        #diphoton_events, selected_photons = diphoton_selections.diphoton_preselection(events, events.Photon, options, self.debug)
+        diphoton_events, selected_photons = diphoton_selections.diphoton_preselection_fromskim(events, gHidx, events.Photon, options, self.debug)
 
         events_and_objects = {}
 
@@ -300,11 +303,11 @@ class LoopHelper():
             if self.debug > 0:
                 print("[LoopHelper] Loading file %s" % file)
 
-            events = self.load_file(file, data = data)
+            events, gHidx = self.load_file(file, data = data)
             if events is None:
                 self.outputs.pop(output)
                 return
-            events_and_objects = self.select_events(events, selection_metadata)
+            events_and_objects = self.select_events(events, gHidx, selection_metadata)
             events = events_and_objects["events"]
 
             events["process_id"] = numpy.ones(len(events)) * process_id
@@ -341,7 +344,9 @@ class LoopHelper():
             events = tree.arrays(branches, library = "ak", how = "zip") 
             # library = "ak" to load arrays as awkward arrays for best performance
             # how = "zip" allows us to access arrays as records, e.g. events.Photon
-        return events
+            idx_keys = tree.keys(filter_name="gHidx")
+            gHidx = tree.arrays( idx_keys, library="ak", how="zip" )
+        return events, gHidx
 
     def chunks(self, files, fpo):
         for i in range(0, len(files), fpo):
